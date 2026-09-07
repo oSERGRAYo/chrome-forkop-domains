@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Forkop Domains — настройки</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 440px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 18px; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input, select { width: 100%; padding: 6px 8px; font: inherit; box-sizing: border-box; }
+    .row { margin-bottom: 4px; }
+    .btns { margin-top: 16px; display: flex; gap: 8px; }
+    button { font: inherit; padding: 7px 14px; cursor: pointer; }
+    #msg { margin-top: 14px; white-space: pre-wrap; }
+    #msg.err { color: #b91c1c; }
+    #msg.ok { color: #15803d; }
+    .hint { font-weight: 400; color: #6b7280; font-size: 12px; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <h1>Forkop Domains</h1>
+
+  <div class="row">
+    <label for="routerUrl">Адрес роутера</label>
+    <input id="routerUrl" type="text" placeholder="http://192.168.1.1/">
+  </div>
+  <div class="row">
+    <label for="user">rpcd-пользователь</label>
+    <input id="user" type="text" autocomplete="username" placeholder="forkop-ext">
+  </div>
+  <div class="row">
+    <label for="pass">Пароль</label>
+    <input id="pass" type="password" autocomplete="current-password">
+    <div class="hint">Хранится в chrome.storage.local в открытом виде — используйте узкий ACL.</div>
+  </div>
+  <div class="row">
+    <label for="applyCmd">Команда применения</label>
+    <select id="applyCmd">
+      <option value="restart">restart</option>
+      <option value="reload">reload</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="domainOption">UCI-опция доменов</label>
+    <input id="domainOption" type="text" placeholder="domain">
+    <div class="hint">Матчер ручных доменов forkop — <code>domain</code>.</div>
+  </div>
+
+  <div class="btns">
+    <button id="save" type="button">Сохранить</button>
+    <button id="test" type="button">Проверить связь</button>
+  </div>
+
+  <div id="msg"></div>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

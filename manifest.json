@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Forkop Domains",
+  "version": "1.0.0",
+  "description": "Сбор доменов со страниц и ручное управление списком доменов секции forkop (OpenWrt) через ubus.",
+  "permissions": ["webRequest", "webNavigation", "tabs", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Forkop Domains", "default_popup": "popup/popup.html" },
+  "options_page": "options/options.html"
+}

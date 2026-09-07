@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+  <title>Forkop Domains</title>
+</head>
+<body>
+  <nav id="tabs">
+    <button data-tab="domains" class="active">Домены</button>
+    <button data-tab="collect">Сбор</button>
+  </nav>
+
+  <div id="status" hidden></div>
+
+  <section id="tab-domains">
+    <div class="row">
+      <label for="sectionSel">Секция</label>
+      <select id="sectionSel"></select>
+    </div>
+
+    <ul id="domList" class="list"></ul>
+
+    <form id="addForm" class="row">
+      <input id="addInput" type="text" placeholder="example.com, sub.example.org" autocomplete="off" spellcheck="false">
+      <button type="submit" title="добавить">+</button>
+    </form>
+
+    <div id="pendingBar" class="bar" hidden>
+      <span id="pendingText"></span>
+      <span class="grow"></span>
+      <button id="revertBtn" type="button" class="ghost">Сбросить</button>
+      <button id="applyBtn" type="button" class="primary">Применить</button>
+    </div>
+  </section>
+
+  <section id="tab-collect" hidden>
+    <div class="row">
+      <button id="reloadCap" class="primary">Перезагрузить и собрать</button>
+      <button id="refreshCap" class="ghost">Обновить</button>
+    </div>
+    <div class="row">
+      <label for="collectSectionSel">В секцию</label>
+      <select id="collectSectionSel"></select>
+      <button id="addSelected" type="button">Добавить выбранные</button>
+    </div>
+    <div class="row tiny">
+      <label><input type="checkbox" id="capAll"> выбрать все</label>
+      <span class="grow"></span>
+      <span id="capCount" class="muted"></span>
+    </div>
+    <ul id="capList" class="list"></ul>
+  </section>
+
+  <footer>
+    <a href="#" id="openOptions">Настройки роутера</a>
+  </footer>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

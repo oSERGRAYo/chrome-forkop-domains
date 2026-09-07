@@ -1,0 +1,24 @@
+{
+  "forkop-domain-mgr": {
+    "description": "Manage forkop manual domain lists from the Forkop Domains browser extension",
+    "read": {
+      "uci": [ "forkop" ],
+      "ubus": {
+        "session": [ "access", "login" ]
+      }
+    },
+    "write": {
+      "uci": [ "forkop" ],
+      "ubus": {
+        "uci":  [ "get", "set", "add", "delete", "commit" ],
+        "file": [ "read", "list", "stat", "write", "exec" ]
+      },
+      "file": {
+        "/etc/init.d/forkop":   [ "exec" ],
+        "/usr/bin/forkop":      [ "exec" ],
+        "/etc/forkop-lists":    [ "read", "list" ],
+        "/etc/forkop-lists/*":  [ "read", "list", "write" ]
+      }
+    }
+  }
+}

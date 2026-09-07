@@ -1,0 +1,15 @@
+# local editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# never commit local config or secrets
+*.local
+secrets.*
+config.local.*
+
+# packed builds
+*.zip
+*.crx
+*.pem
