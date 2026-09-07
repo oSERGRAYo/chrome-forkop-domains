@@ -56,17 +56,17 @@ UCI-лист в секции (`/etc/config/forkop`). Обычно его пра�
 
 ## Как это работает
 
-```
-┌─────────────┐   JSON-RPC / HTTP POST         ┌────────────────────┐
-│  расширение │  ───────────────────────────▶  │  uhttpd  /ubus     │
-│ (popup/opts)│   session.login               │  + rpcd (ACL)      │
-│             │   uci.get / uci.set /          │                    │
-│             │   uci.delete / uci.commit      │  /etc/config/forkop│
-│             │   file.exec                    │                    │
-└─────────────┘  ◀───────────────────────────  └─────────┬──────────┘
-                                                          │ /etc/init.d/forkop reload
-                                                          ▼
-                                                    forkop → sing-box
+```mermaid
+flowchart LR
+    ext["Расширение<br/>(popup / options)"]
+    ubus["uhttpd /ubus<br/>+ rpcd (ACL)"]
+    cfg["/etc/config/forkop"]
+    fk["forkop → sing-box"]
+
+    ext -- "JSON-RPC / HTTP POST<br/>session.login<br/>uci.get · uci.set · uci.delete · uci.commit<br/>file.exec" --> ubus
+    ubus -- "ответ" --> ext
+    ubus --- cfg
+    ubus -- "file.exec: /etc/init.d/forkop reload" --> fk
 ```
 
 1. `session.login` с логином/паролем rpcd-пользователя → `ubus_rpc_session`.
