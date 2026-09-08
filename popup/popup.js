@@ -24,7 +24,8 @@ const els = {
 };
 
 const CFG_KEYS = ["routerUrl", "user", "pass", "applyCmd", "domainOption"];
-let cfg = { applyCmd: "restart", domainOption: "domain" };
+const DEFAULT_CFG = { applyCmd: "", domainOption: "domain" };
+let cfg = { ...DEFAULT_CFG };
 let ubus = null;
 let sections = [];          // [{name, label, text}]
 let section = null;         // current section name
@@ -55,9 +56,40 @@ function fail(e) {
 
 // ---------- config ----------
 async function loadConfig() {
-  const stored = await chrome.storage.local.get(CFG_KEYS);
-  cfg = { applyCmd: "restart", domainOption: "domain", ...stored };
+  const stored = await chrome.storage.local.get([...CFG_KEYS, "cfgSchema"]);
+  // v1.0.0 had no "auto" choice: options always persisted applyCmd:"restart"
+  // and apply() then fired a second `/etc/init.d/forkop restart` after the
+  // commit — racing forkop's own config.change restart and leaving nftables
+  // half-flushed (symptom: proxy traffic dies after "Применить"). On the first
+  // run of >=1.1.0, drop that stale value so "auto" (commit-only) takes effect;
+  // a user who really needs an explicit command re-picks it in options.
+  if (!stored.cfgSchema) {
+    if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
+    await chrome.storage.local.set({ cfgSchema: 2 });
+  }
+  cfg = { ...DEFAULT_CFG, ...stored };
   return cfg.routerUrl && cfg.user && cfg.pass;
+}
+
+// Remember which section the user was last looking at, so reopening the popup
+// doesn't silently drop them onto sections[0] (which reads as "my list vanished").
+async function loadLastSection() {
+  try { return (await chrome.storage.local.get("lastSection")).lastSection || null; }
+  catch { return null; }
+}
+function saveLastSection(name) {
+  chrome.storage.local.set({ lastSection: name }).catch(() => {});
+}
+
+// One transparent retry — a single dropped request on open shouldn't blank the UI.
+async function withRetry(fn, tries = 2) {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) {
+      if (i >= tries) throw e;
+      await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+  }
 }
 
 // ---------- router ----------
@@ -85,7 +117,11 @@ async function connect() {
       sel.append(o);
     }
   }
-  await selectSection(sections[0].name);
+
+  const last = await loadLastSection();
+  const start = sections.some((s) => s.name === last) ? last : sections[0].name;
+  els.collectSectionSel.value = start;
+  await selectSection(start);
 }
 
 function normalizeList(v) {
@@ -94,10 +130,20 @@ function normalizeList(v) {
 }
 
 async function selectSection(name) {
+  clearStatus();
+  let v;
+  try {
+    v = await ubus.uciGet("forkop", name, cfg.domainOption);
+  } catch (e) {
+    // Don't wipe the list we're already showing on a transient read failure —
+    // surface the error and keep the <select> on the section that's live.
+    fail(e);
+    if (section) els.sectionSel.value = section;
+    return;
+  }
   section = name;
   els.sectionSel.value = name;
-  clearStatus();
-  const v = await ubus.uciGet("forkop", section, cfg.domainOption);
+  saveLastSection(name);
   committed = normalizeList(v).filter(Boolean);
   pending = committed.slice();
   renderDomains();
@@ -176,15 +222,24 @@ async function apply() {
     setStatus("Применяю…", "");
     if (list.length) await ubus.uciSet("forkop", section, { [cfg.domainOption]: list });
     else await ubus.uciDelete("forkop", section, cfg.domainOption);
+
+    // `uci commit` emits a `config.change` service event; forkop reacts to it
+    // with a single restart via its own procd trigger — exactly like LuCI's
+    // "Save & Apply". Firing an extra `/etc/init.d/forkop restart` here would
+    // run a second teardown in parallel with that one and can leave the
+    // nftables ruleset half-flushed. So by default we only commit. `applyCmd`
+    // stays as an opt-in escape hatch for forkop builds without the trigger.
     await ubus.uciCommit("forkop");
-    const r = await ubus.exec("/etc/init.d/forkop", [cfg.applyCmd || "restart"]);
-    if (r && typeof r.code === "number" && r.code !== 0) {
-      throw new Error(`forkop ${cfg.applyCmd} → код ${r.code}${r.stderr ? ": " + r.stderr.trim() : ""}`);
+    if (cfg.applyCmd) {
+      const r = await ubus.exec("/etc/init.d/forkop", [cfg.applyCmd]);
+      if (r && typeof r.code === "number" && r.code !== 0) {
+        throw new Error(`forkop ${cfg.applyCmd} → код ${r.code}${r.stderr ? ": " + r.stderr.trim() : ""}`);
+      }
     }
     committed = list.slice();
     pending = list.slice();
     renderDomains();
-    setStatus(`Применено: ${list.length} домен(ов) в «${section}».`, "ok");
+    setStatus(`Применено: ${list.length} домен(ов) в «${section}». forkop перезапускается — подожди ~5–10 с.`, "ok");
   } catch (e) {
     fail(e);
   } finally {
@@ -262,6 +317,7 @@ async function addSelected() {
   const target = els.collectSectionSel.value;
   try {
     if (target !== section) await selectSection(target);
+    if (target !== section) return; // selectSection failed — don't edit the wrong list
     const n = addFromText(picked.join(" "));
     if (!n) { setStatus("Все выбранные домены уже в секции.", "ok"); return; }
     await apply();
@@ -307,7 +363,7 @@ function wire() {
   try {
     const ok = await loadConfig();
     if (!ok) { statusWithOptionsLink("Не заданы адрес роутера / логин / пароль."); return; }
-    await connect();
+    await withRetry(connect);
   } catch (e) {
     fail(e);
   }
