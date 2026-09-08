@@ -1,8 +1,8 @@
 import { Ubus } from "../lib/ubus.js";
 
 const $ = (id) => document.getElementById(id);
-const FIELDS = ["routerUrl", "user", "pass", "applyCmd", "domainOption"];
-const DEFAULTS = { routerUrl: "http://192.168.1.1/", applyCmd: "", domainOption: "domain" };
+const FIELDS = ["routerUrl", "user", "pass", "applyCmd"];
+const DEFAULTS = { routerUrl: "http://192.168.1.1/", applyCmd: "" };
 const msg = $("msg");
 
 function setMsg(text, cls) { msg.textContent = text; msg.className = cls || ""; }
@@ -15,6 +15,8 @@ async function load() {
     if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
     await chrome.storage.local.set({ cfgSchema: 2 });
   }
+  // `domainOption` (single-list picker) is gone as of 1.2.0 — both lists are managed.
+  chrome.storage.local.remove("domainOption").catch(() => {});
   for (const f of FIELDS) $(f).value = stored[f] ?? DEFAULTS[f] ?? "";
 }
 

@@ -43,14 +43,15 @@
       <option value="restart">restart</option>
     </select>
     <div class="hint">После <code>uci commit</code> forkop сам ловит <code>config.change</code>
-      и перезапускается один раз (как LuCI «Save&nbsp;&amp;&nbsp;Apply»). Явную команду
-      выбирайте только если ваша сборка forkop без этого триггера — иначе получите
-      двойной перезапуск и порванный nftables.</div>
+      и перезапускается один раз (как LuCI «Save&nbsp;&amp;&nbsp;Apply»), пересобирая
+      и <code>domain</code>, и <code>domain_suffix</code>. Явную команду выбирайте
+      только если ваша сборка forkop без этого триггера — иначе получите двойной
+      перезапуск и порванный nftables.</div>
   </div>
   <div class="row">
-    <label for="domainOption">UCI-опция доменов</label>
-    <input id="domainOption" type="text" placeholder="domain">
-    <div class="hint">Матчер ручных доменов forkop — <code>domain</code>.</div>
+    <div class="hint">Расширение ведёт два матчера секции: <code>domain</code> (точное
+      имя) и <code>domain_suffix</code> (домен + все поддомены). Режим выбирается
+      у каждой записи на вкладке «Домены».</div>
   </div>
 
   <div class="btns">

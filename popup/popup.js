@@ -1,4 +1,11 @@
 // Popup: manual domain management + per-tab domain collector for a forkop section.
+//
+// Two matchers per section are managed together:
+//   • "exact"  → forkop `domain`         — matches the host verbatim, nothing else
+//   • "suffix" → forkop `domain_suffix`  — matches the apex AND every subdomain
+// A host can be exactly one of them here. `domain_suffix` already covers the
+// bare apex, so a host that the router keeps in *both* lists is folded to
+// "suffix" on read and rewritten to `domain_suffix` only on the next apply.
 import { Ubus } from "../lib/ubus.js";
 import { normalizeHost, groupByRegistrable } from "../lib/domains.js";
 
@@ -9,6 +16,7 @@ const els = {
   domList: $("domList"),
   addForm: $("addForm"),
   addInput: $("addInput"),
+  addMode: $("addMode"),
   pendingBar: $("pendingBar"),
   pendingText: $("pendingText"),
   applyBtn: $("applyBtn"),
@@ -23,14 +31,18 @@ const els = {
   openOptions: $("openOptions"),
 };
 
-const CFG_KEYS = ["routerUrl", "user", "pass", "applyCmd", "domainOption"];
-const DEFAULT_CFG = { applyCmd: "", domainOption: "domain" };
+// UCI option name per matcher.
+const OPT = { exact: "domain", suffix: "domain_suffix" };
+const MODE_LABEL = { exact: "точный", suffix: "поддомены" };
+
+const CFG_KEYS = ["routerUrl", "user", "pass", "applyCmd"];
+const DEFAULT_CFG = { applyCmd: "" };
 let cfg = { ...DEFAULT_CFG };
 let ubus = null;
 let sections = [];          // [{name, label, text}]
 let section = null;         // current section name
-let committed = [];         // domains stored on the router
-let pending = [];           // domains after local edits
+let committed = new Map();  // host -> "exact" | "suffix", as stored on the router
+let pending = new Map();    // host -> "exact" | "suffix", after local edits
 let groups = [];            // collector groups [{reg, hosts}]
 
 // ---------- status ----------
@@ -67,6 +79,9 @@ async function loadConfig() {
     if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
     await chrome.storage.local.set({ cfgSchema: 2 });
   }
+  // `domainOption` was a single-list picker before 1.2.0; both lists are managed
+  // now, so drop it if it's still around.
+  if (stored.domainOption !== undefined) chrome.storage.local.remove("domainOption").catch(() => {});
   cfg = { ...DEFAULT_CFG, ...stored };
   return cfg.routerUrl && cfg.user && cfg.pass;
 }
@@ -131,9 +146,12 @@ function normalizeList(v) {
 
 async function selectSection(name) {
   clearStatus();
-  let v;
+  let ex, sf;
   try {
-    v = await ubus.uciGet("forkop", name, cfg.domainOption);
+    [ex, sf] = await Promise.all([
+      ubus.uciGet("forkop", name, OPT.exact),
+      ubus.uciGet("forkop", name, OPT.suffix),
+    ]);
   } catch (e) {
     // Don't wipe the list we're already showing on a transient read failure —
     // surface the error and keep the <select> on the section that's live.
@@ -144,72 +162,108 @@ async function selectSection(name) {
   section = name;
   els.sectionSel.value = name;
   saveLastSection(name);
-  committed = normalizeList(v).filter(Boolean);
-  pending = committed.slice();
+  committed = new Map();
+  for (const h of normalizeList(sf).filter(Boolean)) committed.set(h, "suffix");
+  for (const h of normalizeList(ex).filter(Boolean)) {
+    // A host in `domain` only → exact. A host in both lists → `domain_suffix`
+    // already covers it, so keep it as "suffix" (this quietly de-dups on apply).
+    if (!committed.has(h)) committed.set(h, "exact");
+  }
+  pending = new Map(committed);
   renderDomains();
 }
 
 // ---------- domains tab ----------
+// added   — in pending, not committed
+// removed — in committed, not pending
+// changed — in both, but the matcher was flipped
 function diff() {
-  const cSet = new Set(committed), pSet = new Set(pending);
-  const added = pending.filter((d) => !cSet.has(d));
-  const removed = committed.filter((d) => !pSet.has(d));
-  return { added, removed };
+  const added = [], removed = [], changed = [];
+  for (const [h, m] of pending) {
+    if (!committed.has(h)) added.push(h);
+    else if (committed.get(h) !== m) changed.push(h);
+  }
+  for (const h of committed.keys()) if (!pending.has(h)) removed.push(h);
+  return { added, removed, changed };
 }
 
 function renderDomains() {
-  const cSet = new Set(committed), pSet = new Set(pending);
-  const all = [...new Set([...committed, ...pending])].sort();
+  const hosts = [...new Set([...committed.keys(), ...pending.keys()])].sort();
   els.domList.textContent = "";
 
-  if (!all.length) {
+  if (!hosts.length) {
     const li = document.createElement("li");
     li.className = "muted";
     li.textContent = "Список пуст";
     els.domList.append(li);
   }
 
-  for (const d of all) {
-    const inC = cSet.has(d), inP = pSet.has(d);
+  for (const h of hosts) {
+    const inC = committed.has(h), inP = pending.has(h);
+    const mode = inP ? pending.get(h) : committed.get(h);
+
     const li = document.createElement("li");
-    const span = document.createElement("span");
-    span.className = "grow";
-    span.textContent = d;
-    li.append(span);
+    const name = document.createElement("span");
+    name.className = "grow";
+    name.textContent = h;
+    li.append(name);
+
+    // matcher badge — click to flip exact <-> suffix (only while the host is in pending)
+    const badge = document.createElement("button");
+    badge.type = "button";
+    badge.className = "mode mode-" + mode;
+    badge.textContent = MODE_LABEL[mode];
+    if (inP) {
+      badge.title = "переключить точный / с поддоменами";
+      badge.addEventListener("click", () => {
+        pending.set(h, pending.get(h) === "suffix" ? "exact" : "suffix");
+        renderDomains();
+      });
+    } else {
+      badge.disabled = true;
+    }
+    li.append(badge);
+
     const btn = document.createElement("button");
     btn.type = "button";
     if (inP && !inC) {
       li.className = "added";
       btn.textContent = "убрать";
-      btn.addEventListener("click", () => { pending = pending.filter((x) => x !== d); renderDomains(); });
+      btn.addEventListener("click", () => { pending.delete(h); renderDomains(); });
     } else if (inC && !inP) {
       li.className = "removed";
       btn.textContent = "вернуть";
-      btn.addEventListener("click", () => { pending.push(d); renderDomains(); });
+      btn.addEventListener("click", () => { pending.set(h, committed.get(h)); renderDomains(); });
     } else {
+      if (inC && committed.get(h) !== pending.get(h)) li.className = "changed";
       btn.textContent = "×";
       btn.title = "удалить";
-      btn.addEventListener("click", () => { pending = pending.filter((x) => x !== d); renderDomains(); });
+      btn.addEventListener("click", () => { pending.delete(h); renderDomains(); });
     }
     li.append(btn);
     els.domList.append(li);
   }
 
-  const { added, removed } = diff();
-  if (added.length || removed.length) {
-    els.pendingText.textContent = `+${added.length} / −${removed.length}`;
+  const { added, removed, changed } = diff();
+  if (added.length || removed.length || changed.length) {
+    const parts = [`+${added.length}`, `−${removed.length}`];
+    if (changed.length) parts.push(`↹${changed.length}`);
+    els.pendingText.textContent = parts.join(" / ");
     els.pendingBar.hidden = false;
   } else {
     els.pendingBar.hidden = true;
   }
 }
 
-function addFromText(text) {
+// Add hosts from free text under the given matcher. Re-adding an existing host
+// just moves it to `mode` (handy: paste a list, flip the ones you want exact).
+function addFromText(text, mode = "suffix") {
   const parts = String(text).split(/[\s,]+/).filter(Boolean);
   let n = 0;
   for (const p of parts) {
     const h = normalizeHost(p);
-    if (h && !pending.includes(h)) { pending.push(h); n++; }
+    if (!h) continue;
+    if (pending.get(h) !== mode) { pending.set(h, mode); n++; }
   }
   renderDomains();
   return n;
@@ -218,17 +272,25 @@ function addFromText(text) {
 async function apply() {
   els.applyBtn.disabled = els.revertBtn.disabled = true;
   try {
-    const list = [...new Set(pending)];
     setStatus("Применяю…", "");
-    if (list.length) await ubus.uciSet("forkop", section, { [cfg.domainOption]: list });
-    else await ubus.uciDelete("forkop", section, cfg.domainOption);
+    const lists = { exact: [], suffix: [] };
+    for (const [h, m] of pending) lists[m].push(h);
+    lists.exact.sort();
+    lists.suffix.sort();
+
+    for (const mode of ["exact", "suffix"]) {
+      const list = [...new Set(lists[mode])];
+      if (list.length) await ubus.uciSet("forkop", section, { [OPT[mode]]: list });
+      else await ubus.uciDelete("forkop", section, OPT[mode]);
+    }
 
     // `uci commit` emits a `config.change` service event; forkop reacts to it
     // with a single restart via its own procd trigger — exactly like LuCI's
-    // "Save & Apply". Firing an extra `/etc/init.d/forkop restart` here would
-    // run a second teardown in parallel with that one and can leave the
-    // nftables ruleset half-flushed. So by default we only commit. `applyCmd`
-    // stays as an opt-in escape hatch for forkop builds without the trigger.
+    // "Save & Apply", and it recompiles both `domain` and `domain_suffix` into
+    // the sing-box route rules. Firing an extra `/etc/init.d/forkop restart`
+    // here would run a second teardown in parallel and can leave the nftables
+    // ruleset half-flushed. So by default we only commit. `applyCmd` stays as
+    // an opt-in escape hatch for forkop builds without the trigger.
     await ubus.uciCommit("forkop");
     if (cfg.applyCmd) {
       const r = await ubus.exec("/etc/init.d/forkop", [cfg.applyCmd]);
@@ -236,10 +298,13 @@ async function apply() {
         throw new Error(`forkop ${cfg.applyCmd} → код ${r.code}${r.stderr ? ": " + r.stderr.trim() : ""}`);
       }
     }
-    committed = list.slice();
-    pending = list.slice();
+    committed = new Map(pending);
     renderDomains();
-    setStatus(`Применено: ${list.length} домен(ов) в «${section}». forkop перезапускается — подожди ~5–10 с.`, "ok");
+    setStatus(
+      `Применено: ${lists.exact.length} точн. + ${lists.suffix.length} с поддоменами в «${section}». ` +
+      `forkop перезапускается — подожди ~10–15 с.`,
+      "ok",
+    );
   } catch (e) {
     fail(e);
   } finally {
@@ -318,7 +383,9 @@ async function addSelected() {
   try {
     if (target !== section) await selectSection(target);
     if (target !== section) return; // selectSection failed — don't edit the wrong list
-    const n = addFromText(picked.join(" "));
+    // Collected picks are registrable domains → route the whole site (subdomains
+    // included). Flip individual entries to "точный" on the Домены tab if needed.
+    const n = addFromText(picked.join(" "), "suffix");
     if (!n) { setStatus("Все выбранные домены уже в секции.", "ok"); return; }
     await apply();
     switchTab("domains");
@@ -343,11 +410,11 @@ function wire() {
   els.sectionSel.addEventListener("change", () => selectSection(els.sectionSel.value).catch(fail));
   els.addForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    addFromText(els.addInput.value);
+    addFromText(els.addInput.value, els.addMode.value);
     els.addInput.value = "";
   });
   els.applyBtn.addEventListener("click", () => apply());
-  els.revertBtn.addEventListener("click", () => { pending = committed.slice(); renderDomains(); clearStatus(); });
+  els.revertBtn.addEventListener("click", () => { pending = new Map(committed); renderDomains(); clearStatus(); });
   els.refreshCap.addEventListener("click", () => refreshCapture());
   els.reloadCap.addEventListener("click", () => reloadAndCapture());
   els.addSelected.addEventListener("click", () => addSelected());
