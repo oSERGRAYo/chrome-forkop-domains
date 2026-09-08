@@ -2,7 +2,7 @@ import { Ubus } from "../lib/ubus.js";
 
 const $ = (id) => document.getElementById(id);
 const FIELDS = ["routerUrl", "user", "pass", "applyCmd", "domainOption"];
-const DEFAULTS = { routerUrl: "http://192.168.1.1/", applyCmd: "restart", domainOption: "domain" };
+const DEFAULTS = { routerUrl: "http://192.168.1.1/", applyCmd: "", domainOption: "domain" };
 const msg = $("msg");
 
 function setMsg(text, cls) { msg.textContent = text; msg.className = cls || ""; }

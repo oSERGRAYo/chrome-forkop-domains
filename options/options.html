@@ -38,9 +38,14 @@
   <div class="row">
     <label for="applyCmd">Команда применения</label>
     <select id="applyCmd">
-      <option value="restart">restart</option>
+      <option value="">авто — forkop перезапустится сам (рекомендуется)</option>
       <option value="reload">reload</option>
+      <option value="restart">restart</option>
     </select>
+    <div class="hint">После <code>uci commit</code> forkop сам ловит <code>config.change</code>
+      и перезапускается один раз (как LuCI «Save&nbsp;&amp;&nbsp;Apply»). Явную команду
+      выбирайте только если ваша сборка forkop без этого триггера — иначе получите
+      двойной перезапуск и порванный nftables.</div>
   </div>
   <div class="row">
     <label for="domainOption">UCI-опция доменов</label>
