@@ -6,7 +6,7 @@
 // A host can be exactly one of them here. `domain_suffix` already covers the
 // bare apex, so a host that the router keeps in *both* lists is folded to
 // "suffix" on read and rewritten to `domain_suffix` only on the next apply.
-import { Ubus } from "../lib/ubus.js";
+import { Ubus, UbusError } from "../lib/ubus.js";
 import { normalizeHost, groupByRegistrable } from "../lib/domains.js";
 
 const $ = (id) => document.getElementById(id);
@@ -67,21 +67,25 @@ function fail(e) {
 }
 
 // ---------- config ----------
+const CFG_SCHEMA = 3;
+
 async function loadConfig() {
-  const stored = await chrome.storage.local.get([...CFG_KEYS, "cfgSchema"]);
-  // v1.0.0 had no "auto" choice: options always persisted applyCmd:"restart"
-  // and apply() then fired a second `/etc/init.d/forkop restart` after the
-  // commit — racing forkop's own config.change restart and leaving nftables
-  // half-flushed (symptom: proxy traffic dies after "Применить"). On the first
-  // run of >=1.1.0, drop that stale value so "auto" (commit-only) takes effect;
-  // a user who really needs an explicit command re-picks it in options.
-  if (!stored.cfgSchema) {
-    if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
-    await chrome.storage.local.set({ cfgSchema: 2 });
+  const stored = await chrome.storage.local.get([...CFG_KEYS, "cfgSchema", "domainOption"]);
+  // schema < 3: force `applyCmd` back to "auto".
+  //   • v1.0.0 always persisted applyCmd:"restart" (no "auto" choice existed),
+  //     and apply() then fired `/etc/init.d/forkop restart` on top of forkop's
+  //     own config.change restart → two teardowns → half-flushed nftables.
+  //   • that explicit restart also always trips ubus TIMEOUT (the init script
+  //     outlives rpcd's ~30s call window), surfacing as an error in the popup.
+  // Commit-only is proven to apply both `domain` and `domain_suffix` in <15s,
+  // so "auto" is the right default. Someone on a trigger-less forkop build
+  // re-picks reload/restart in options (apply() now tolerates the TIMEOUT).
+  if (!(stored.cfgSchema >= CFG_SCHEMA)) {
+    await chrome.storage.local.remove(["applyCmd", "domainOption"]);
+    await chrome.storage.local.set({ cfgSchema: CFG_SCHEMA });
+    delete stored.applyCmd;
+    delete stored.domainOption;
   }
-  // `domainOption` was a single-list picker before 1.2.0; both lists are managed
-  // now, so drop it if it's still around.
-  if (stored.domainOption !== undefined) chrome.storage.local.remove("domainOption").catch(() => {});
   cfg = { ...DEFAULT_CFG, ...stored };
   return cfg.routerUrl && cfg.user && cfg.pass;
 }
@@ -293,9 +297,17 @@ async function apply() {
     // an opt-in escape hatch for forkop builds without the trigger.
     await ubus.uciCommit("forkop");
     if (cfg.applyCmd) {
-      const r = await ubus.exec("/etc/init.d/forkop", [cfg.applyCmd]);
-      if (r && typeof r.code === "number" && r.code !== 0) {
-        throw new Error(`forkop ${cfg.applyCmd} → код ${r.code}${r.stderr ? ": " + r.stderr.trim() : ""}`);
+      try {
+        const r = await ubus.exec("/etc/init.d/forkop", [cfg.applyCmd]);
+        if (r && typeof r.code === "number" && r.code !== 0) {
+          throw new Error(`forkop ${cfg.applyCmd} → код ${r.code}${r.stderr ? ": " + r.stderr.trim() : ""}`);
+        }
+      } catch (e) {
+        // `/etc/init.d/forkop restart` recompiles lists + reloads sing-box and
+        // nftables — that routinely outlives rpcd's ~30s call window, so ubus
+        // reports TIMEOUT (code 7) even though the restart goes on to finish.
+        // Only a real failure (bad command, PERMISSION_DENIED, …) is re-raised.
+        if (!(e instanceof UbusError && e.code === 7)) throw e;
       }
     }
     committed = new Map(pending);

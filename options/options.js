@@ -7,16 +7,18 @@ const msg = $("msg");
 
 function setMsg(text, cls) { msg.textContent = text; msg.className = cls || ""; }
 
+const CFG_SCHEMA = 3;
+
 async function load() {
   const stored = await chrome.storage.local.get([...FIELDS, "cfgSchema"]);
-  // See popup.js loadConfig(): v1.0.0 persisted applyCmd:"restart", which now
-  // causes a double forkop restart. Clear it once so the form shows "авто".
-  if (!stored.cfgSchema) {
-    if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
-    await chrome.storage.local.set({ cfgSchema: 2 });
+  // See popup.js loadConfig(): schema < 3 resets applyCmd to "auto" — the old
+  // persisted "restart" both double-restarted forkop and always tripped ubus
+  // TIMEOUT. `domainOption` (single-list picker) is gone as of 1.2.0.
+  if (!(stored.cfgSchema >= CFG_SCHEMA)) {
+    await chrome.storage.local.remove(["applyCmd", "domainOption"]);
+    await chrome.storage.local.set({ cfgSchema: CFG_SCHEMA });
+    delete stored.applyCmd;
   }
-  // `domainOption` (single-list picker) is gone as of 1.2.0 — both lists are managed.
-  chrome.storage.local.remove("domainOption").catch(() => {});
   for (const f of FIELDS) $(f).value = stored[f] ?? DEFAULTS[f] ?? "";
 }
 
