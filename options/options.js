@@ -8,7 +8,13 @@ const msg = $("msg");
 function setMsg(text, cls) { msg.textContent = text; msg.className = cls || ""; }
 
 async function load() {
-  const stored = await chrome.storage.local.get(FIELDS);
+  const stored = await chrome.storage.local.get([...FIELDS, "cfgSchema"]);
+  // See popup.js loadConfig(): v1.0.0 persisted applyCmd:"restart", which now
+  // causes a double forkop restart. Clear it once so the form shows "авто".
+  if (!stored.cfgSchema) {
+    if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
+    await chrome.storage.local.set({ cfgSchema: 2 });
+  }
   for (const f of FIELDS) $(f).value = stored[f] ?? DEFAULTS[f] ?? "";
 }
 

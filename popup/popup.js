@@ -56,7 +56,17 @@ function fail(e) {
 
 // ---------- config ----------
 async function loadConfig() {
-  const stored = await chrome.storage.local.get(CFG_KEYS);
+  const stored = await chrome.storage.local.get([...CFG_KEYS, "cfgSchema"]);
+  // v1.0.0 had no "auto" choice: options always persisted applyCmd:"restart"
+  // and apply() then fired a second `/etc/init.d/forkop restart` after the
+  // commit — racing forkop's own config.change restart and leaving nftables
+  // half-flushed (symptom: proxy traffic dies after "Применить"). On the first
+  // run of >=1.1.0, drop that stale value so "auto" (commit-only) takes effect;
+  // a user who really needs an explicit command re-picks it in options.
+  if (!stored.cfgSchema) {
+    if (stored.applyCmd) { delete stored.applyCmd; await chrome.storage.local.remove("applyCmd"); }
+    await chrome.storage.local.set({ cfgSchema: 2 });
+  }
   cfg = { ...DEFAULT_CFG, ...stored };
   return cfg.routerUrl && cfg.user && cfg.pass;
 }
