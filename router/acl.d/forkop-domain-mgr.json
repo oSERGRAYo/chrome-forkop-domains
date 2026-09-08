@@ -10,14 +10,11 @@
     "write": {
       "uci": [ "forkop" ],
       "ubus": {
-        "uci":  [ "get", "set", "add", "delete", "commit" ],
-        "file": [ "read", "list", "stat", "write", "exec" ]
+        "uci":  [ "get", "set", "delete", "commit" ],
+        "file": [ "exec" ]
       },
       "file": {
-        "/etc/init.d/forkop":   [ "exec" ],
-        "/usr/bin/forkop":      [ "exec" ],
-        "/etc/forkop-lists":    [ "read", "list" ],
-        "/etc/forkop-lists/*":  [ "read", "list", "write" ]
+        "/etc/init.d/forkop": [ "exec" ]
       }
     }
   }

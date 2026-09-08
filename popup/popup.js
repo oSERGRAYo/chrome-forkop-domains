@@ -44,6 +44,22 @@ let section = null;         // current section name
 let committed = new Map();  // host -> "exact" | "suffix", as stored on the router
 let pending = new Map();    // host -> "exact" | "suffix", after local edits
 let groups = [];            // collector groups [{reg, hosts}]
+let busy = false;           // an apply is in flight — every mutating control is locked
+let ready = false;          // connected AND at least one section exists
+let selectToken = 0;        // guards against a stale selectSection response landing late
+
+// A single switch for everything that can mutate `pending` or `section`.
+// apply() takes a snapshot up front, so anything the user changes mid-flight
+// would silently diverge from what actually reached the router.
+function setBusy(v) {
+  busy = v;
+  const lock = v || !ready;
+  els.applyBtn.disabled = els.revertBtn.disabled = v;
+  els.sectionSel.disabled = els.collectSectionSel.disabled = lock;
+  els.addInput.disabled = els.addSelected.disabled = lock;
+  for (const b of els.addForm.querySelectorAll("button, select")) b.disabled = lock;
+  for (const b of els.domList.querySelectorAll("button")) b.disabled = v;
+}
 
 // ---------- status ----------
 function setStatus(msg, cls) {
@@ -125,7 +141,15 @@ async function connect() {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  if (!sections.length) { setStatus("В forkop нет секций.", "err"); return; }
+  if (!sections.length) {
+    // Nothing to edit: leave the form inert rather than letting "Применить"
+    // fire `uci set` with section === null.
+    setStatus("В forkop нет секций — расширению нечего редактировать.", "err");
+    ready = false;
+    setBusy(false);
+    return;
+  }
+  ready = true;
 
   for (const sel of [els.sectionSel, els.collectSectionSel]) {
     sel.textContent = "";
@@ -150,6 +174,9 @@ function normalizeList(v) {
 
 async function selectSection(name) {
   clearStatus();
+  // Every read carries a token; a slow response for an abandoned section must
+  // not overwrite the list the user has since switched to.
+  const token = ++selectToken;
   let ex, sf;
   try {
     [ex, sf] = await Promise.all([
@@ -159,10 +186,12 @@ async function selectSection(name) {
   } catch (e) {
     // Don't wipe the list we're already showing on a transient read failure —
     // surface the error and keep the <select> on the section that's live.
+    if (token !== selectToken) return;
     fail(e);
     if (section) els.sectionSel.value = section;
     return;
   }
+  if (token !== selectToken) return;
   section = name;
   els.sectionSel.value = name;
   saveLastSection(name);
@@ -217,7 +246,7 @@ function renderDomains() {
     badge.type = "button";
     badge.className = "mode mode-" + mode;
     badge.textContent = MODE_LABEL[mode];
-    if (inP) {
+    if (inP && !busy) {
       badge.title = "переключить точный / с поддоменами";
       badge.addEventListener("click", () => {
         pending.set(h, pending.get(h) === "suffix" ? "exact" : "suffix");
@@ -230,6 +259,7 @@ function renderDomains() {
 
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.disabled = busy;
     if (inP && !inC) {
       li.className = "added";
       btn.textContent = "убрать";
@@ -264,28 +294,39 @@ function renderDomains() {
 function addFromText(text, mode = "suffix") {
   const parts = String(text).split(/[\s,]+/).filter(Boolean);
   let n = 0;
+  const bad = [];
   for (const p of parts) {
     const h = normalizeHost(p);
-    if (!h) continue;
+    // Say what was thrown away — silently dropping input reads as "«+» сломан".
+    if (!h) { bad.push(p); continue; }
     if (pending.get(h) !== mode) { pending.set(h, mode); n++; }
   }
   renderDomains();
-  return n;
+  return { added: n, rejected: bad };
 }
 
 async function apply() {
-  els.applyBtn.disabled = els.revertBtn.disabled = true;
+  if (busy || !ready || !section) return;
+  // Snapshot both the target section and the edit set. Everything below is
+  // async, and `section`/`pending` are module state: without the snapshot a
+  // mid-flight section switch could write the two options into DIFFERENT
+  // sections, and `committed = pending` at the end would swallow edits made
+  // during the request as if they had been saved.
+  const sec = section;
+  const snap = new Map(pending);
+  setBusy(true);
+  renderDomains();
   try {
     setStatus("Применяю…", "");
     const lists = { exact: [], suffix: [] };
-    for (const [h, m] of pending) lists[m].push(h);
+    for (const [h, m] of snap) lists[m].push(h);
     lists.exact.sort();
     lists.suffix.sort();
 
     for (const mode of ["exact", "suffix"]) {
       const list = [...new Set(lists[mode])];
-      if (list.length) await ubus.uciSet("forkop", section, { [OPT[mode]]: list });
-      else await ubus.uciDelete("forkop", section, OPT[mode]);
+      if (list.length) await ubus.uciSet("forkop", sec, { [OPT[mode]]: list });
+      else await ubus.uciDelete("forkop", sec, OPT[mode]);
     }
 
     // `uci commit` emits a `config.change` service event; forkop reacts to it
@@ -310,17 +351,28 @@ async function apply() {
         if (!(e instanceof UbusError && e.code === 7)) throw e;
       }
     }
-    committed = new Map(pending);
-    renderDomains();
+    // Only the snapshot is known to be on the router. Anything the user typed
+    // while the request was in flight stays in `pending` as an unsaved diff.
+    if (section === sec) committed = snap;
     setStatus(
-      `Применено: ${lists.exact.length} точн. + ${lists.suffix.length} с поддоменами в «${section}». ` +
+      `Применено: ${lists.exact.length} точн. + ${lists.suffix.length} с поддоменами в «${sec}». ` +
       `forkop перезапускается — подожди ~10–15 с.`,
       "ok",
     );
   } catch (e) {
-    fail(e);
+    if (e instanceof UbusError && e.code === 7) {
+      // Client-side timeout: the write may well have landed. Say so instead of
+      // implying it failed, and let the user re-open the popup to check.
+      setStatus(
+        `Роутер не ответил вовремя. Изменения могли примениться — закрой и открой попап, чтобы увидеть текущий список секции «${sec}».`,
+        "err",
+      );
+    } else {
+      fail(e);
+    }
   } finally {
-    els.applyBtn.disabled = els.revertBtn.disabled = false;
+    setBusy(false);
+    renderDomains();
   }
 }
 
@@ -365,7 +417,12 @@ async function refreshCapture() {
     const tabId = await activeTabId();
     if (!tabId) return setStatus("Нет активной вкладки.", "err");
     const res = await chrome.runtime.sendMessage({ type: "getCapture", tabId });
-    groups = groupByRegistrable((res && res.hosts) || []);
+    // The worker records raw `URL.hostname` values, so bare IP literals and
+    // other non-domains arrive here. Without this filter registrable() would
+    // split "104.21.5.9" into a "5.9" group and one click would push that
+    // straight into the section's domain_suffix list.
+    const hosts = ((res && res.hosts) || []).map(normalizeHost).filter(Boolean);
+    groups = groupByRegistrable(hosts);
     renderGroups();
     clearStatus();
   } catch (e) { fail(e); }
@@ -389,16 +446,27 @@ async function reloadAndCapture() {
 }
 
 async function addSelected() {
+  if (busy || !ready) return;
   const picked = [...els.capList.querySelectorAll("input[type=checkbox]:checked")].map((c) => c.value);
   if (!picked.length) return setStatus("Ничего не отмечено.", "err");
   const target = els.collectSectionSel.value;
   try {
-    if (target !== section) await selectSection(target);
-    if (target !== section) return; // selectSection failed — don't edit the wrong list
+    // Switching sections here throws away unsaved edits in the current one —
+    // make the user resolve them first instead of losing them silently.
+    if (target !== section) {
+      const { added, removed, changed } = diff();
+      if (added.length || removed.length || changed.length) {
+        els.collectSectionSel.value = section;
+        setStatus(`В секции «${section}» есть несохранённые правки. Примени или сбрось их, потом добавляй в другую секцию.`, "err");
+        return;
+      }
+      await selectSection(target);
+      if (target !== section) return; // selectSection failed — don't edit the wrong list
+    }
     // Collected picks are registrable domains → route the whole site (subdomains
     // included). Flip individual entries to "точный" on the Домены tab if needed.
-    const n = addFromText(picked.join(" "), "suffix");
-    if (!n) { setStatus("Все выбранные домены уже в секции.", "ok"); return; }
+    const { added } = addFromText(picked.join(" "), "suffix");
+    if (!added) { setStatus("Все выбранные домены уже в секции.", "ok"); return; }
     await apply();
     switchTab("domains");
   } catch (e) { fail(e); }
@@ -419,14 +487,32 @@ function wire() {
     b.addEventListener("click", () => switchTab(b.dataset.tab));
   }
   els.openOptions.addEventListener("click", (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
-  els.sectionSel.addEventListener("change", () => selectSection(els.sectionSel.value).catch(fail));
+  els.sectionSel.addEventListener("change", () => {
+    if (busy) { els.sectionSel.value = section; return; }
+    // Switching wipes `pending`; refuse while there is something to lose.
+    const { added, removed, changed } = diff();
+    if (added.length || removed.length || changed.length) {
+      els.sectionSel.value = section;
+      setStatus("Сначала «Применить» или «Сбросить» — иначе правки этой секции пропадут.", "err");
+      return;
+    }
+    selectSection(els.sectionSel.value).catch(fail);
+  });
   els.addForm.addEventListener("submit", (e) => {
     e.preventDefault();
-    addFromText(els.addInput.value, els.addMode.value);
+    if (busy || !ready) return;
+    const { added, rejected } = addFromText(els.addInput.value, els.addMode.value);
     els.addInput.value = "";
+    if (rejected.length) setStatus(`Не похоже на домены, пропущено: ${rejected.slice(0, 5).join(", ")}${rejected.length > 5 ? "…" : ""}`, "err");
+    else if (added) clearStatus();
   });
   els.applyBtn.addEventListener("click", () => apply());
-  els.revertBtn.addEventListener("click", () => { pending = new Map(committed); renderDomains(); clearStatus(); });
+  els.revertBtn.addEventListener("click", () => {
+    if (busy) return;
+    pending = new Map(committed);
+    renderDomains();
+    clearStatus();
+  });
   els.refreshCap.addEventListener("click", () => refreshCapture());
   els.reloadCap.addEventListener("click", () => reloadAndCapture());
   els.addSelected.addEventListener("click", () => addSelected());
@@ -439,10 +525,16 @@ function wire() {
 (async () => {
   wire();
   renderGroups();
+  renderDomains();     // "Список пуст" beats an empty panel while we connect
+  setBusy(false);      // controls stay locked until `ready` flips
   try {
     const ok = await loadConfig();
     if (!ok) { statusWithOptionsLink("Не заданы адрес роутера / логин / пароль."); return; }
+    // Connecting can take seconds (login + two reads, plus retries). Without a
+    // status line the popup just sits there looking broken.
+    setStatus("Подключаюсь к роутеру…", "");
     await withRetry(connect);
+    setBusy(false);
   } catch (e) {
     fail(e);
   }
