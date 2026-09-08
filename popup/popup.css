@@ -9,6 +9,7 @@
   --added-bg: #dcfce7;
   --removed: #b91c1c;
   --removed-bg: #fee2e2;
+  --changed-bg: #fef9c3;
   --err: #b91c1c;
   --ok: #15803d;
 }
@@ -23,6 +24,7 @@
     --added-bg: #14351f;
     --removed: #f87171;
     --removed-bg: #3a1a1a;
+    --changed-bg: #3a3410;
     --err: #f87171;
     --ok: #4ade80;
   }
@@ -80,6 +82,15 @@ select, input[type="text"] {
 }
 #sectionSel, #collectSectionSel { flex: 1; }
 #addInput { flex: 1; }
+#addMode { flex: 0 0 auto; }
+
+.hint {
+  margin: -2px 0 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.hint code { font-size: 11px; }
 
 button {
   font: inherit;
@@ -125,7 +136,21 @@ button:disabled { opacity: .5; cursor: default; }
 }
 .list li.added { background: var(--added-bg); color: var(--added); }
 .list li.removed { background: var(--removed-bg); color: var(--removed); text-decoration: line-through; }
+.list li.changed { background: var(--changed-bg); }
 .list li.muted { color: var(--muted); justify-content: center; }
+
+/* matcher badge */
+.list li button.mode {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+}
+.list li button.mode.mode-suffix { color: var(--accent); border-color: var(--accent); }
+.list li button.mode:disabled { opacity: .7; }
 
 .bar {
   display: flex;

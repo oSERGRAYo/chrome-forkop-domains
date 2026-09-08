@@ -24,8 +24,16 @@
 
     <form id="addForm" class="row">
       <input id="addInput" type="text" placeholder="example.com, sub.example.org" autocomplete="off" spellcheck="false">
+      <select id="addMode" title="как сопоставлять домен">
+        <option value="suffix">+ поддомены</option>
+        <option value="exact">точный</option>
+      </select>
       <button type="submit" title="добавить">+</button>
     </form>
+    <p class="hint">
+      <b>+ поддомены</b> (<code>domain_suffix</code>) — сам домен и все его поддомены;
+      <b>точный</b> (<code>domain</code>) — только это имя. Бейдж у записи переключает режим.
+    </p>
 
     <div id="pendingBar" class="bar" hidden>
       <span id="pendingText"></span>
@@ -45,6 +53,7 @@
       <select id="collectSectionSel"></select>
       <button id="addSelected" type="button">Добавить выбранные</button>
     </div>
+    <p class="hint">Добавляются с поддоменами (<code>domain_suffix</code>) — на вкладке «Домены» можно переключить на точный.</p>
     <div class="row tiny">
       <label><input type="checkbox" id="capAll"> выбрать все</label>
       <span class="grow"></span>
