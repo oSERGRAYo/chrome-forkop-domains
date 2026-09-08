@@ -1,13 +1,17 @@
-import { Ubus } from "../lib/ubus.js";
+import { Ubus, normalizeBase } from "../lib/ubus.js";
 
 const $ = (id) => document.getElementById(id);
 const FIELDS = ["routerUrl", "user", "pass", "applyCmd"];
 const DEFAULTS = { routerUrl: "http://192.168.1.1/", applyCmd: "" };
+// Trimming a password would make one with a leading/trailing space
+// unenterable — and `test()` used to trim differently from `save()`, so
+// "Проверить связь" said OK while the popup got Permission denied.
+const NO_TRIM = new Set(["pass"]);
+const CFG_SCHEMA = 3;
 const msg = $("msg");
 
 function setMsg(text, cls) { msg.textContent = text; msg.className = cls || ""; }
-
-const CFG_SCHEMA = 3;
+function field(f) { return NO_TRIM.has(f) ? $(f).value : $(f).value.trim(); }
 
 async function load() {
   const stored = await chrome.storage.local.get([...FIELDS, "cfgSchema"]);
@@ -24,17 +28,31 @@ async function load() {
 
 async function save() {
   const out = {};
-  for (const f of FIELDS) out[f] = $(f).value.trim() || DEFAULTS[f] || "";
+  for (const f of FIELDS) out[f] = field(f) || DEFAULTS[f] || "";
+  // Reject a bad address here rather than letting a schemeless host resolve
+  // relative to chrome-extension:// and fail later as a bogus CORS error.
+  try {
+    out.routerUrl = normalizeBase(out.routerUrl) + "/";
+  } catch (e) {
+    setMsg((e && e.message) || String(e), "err");
+    return;
+  }
+  if (!out.user || !out.pass) {
+    setMsg("Нужны логин и пароль rpcd-пользователя.", "err");
+    return;
+  }
   await chrome.storage.local.set(out);
+  $("routerUrl").value = out.routerUrl;
   setMsg("Сохранено.", "ok");
 }
 
 async function test() {
   setMsg("Проверяю…", "");
   try {
-    const url = $("routerUrl").value.trim() || DEFAULTS.routerUrl;
-    const u = new Ubus(url);
-    await u.login($("user").value.trim(), $("pass").value);
+    // Exactly the values save() would persist — otherwise the check can pass
+    // with credentials the popup will never see.
+    const u = new Ubus(field("routerUrl") || DEFAULTS.routerUrl);
+    await u.login(field("user"), field("pass"));
     const values = await u.uciGetAll("forkop");
     const secs = Object.values(values)
       .filter((s) => s && s[".type"] === "section" && s[".name"] !== "settings")
@@ -46,6 +64,17 @@ async function test() {
   }
 }
 
-$("save").addEventListener("click", save);
-$("test").addEventListener("click", test);
-load();
+// Wire only after the stored values are in the form: clicking "Сохранить"
+// during an un-awaited load() used to persist empty fields over the real ones.
+(async () => {
+  const buttons = [$("save"), $("test")];
+  for (const b of buttons) b.disabled = true;
+  try {
+    await load();
+  } catch (e) {
+    setMsg((e && e.message) || String(e), "err");
+  }
+  $("save").addEventListener("click", () => save().catch((e) => setMsg(String(e), "err")));
+  $("test").addEventListener("click", () => test());
+  for (const b of buttons) b.disabled = false;
+})();
